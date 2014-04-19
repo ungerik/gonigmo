@@ -1,5 +1,5 @@
 // Comparing the speeds of the golang native regex library and rubex.
-// The numbers show a dramatic difference, with rubex being nearly 400 
+// The numbers show a dramatic difference, with rubex being nearly 400
 // times slower than the native go libraries.  Unfortunately for us,
 // the native go libraries have a different regex behavior than rubex,
 // so we'll have to hack at it a bit to fit our needs if we decide to use it.
