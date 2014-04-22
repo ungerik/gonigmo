@@ -1,0 +1,7 @@
+Name: oniguruma
+Description: Regular expression library
+Version: 5.9.5
+Requires:
+Libs: -L/usr/local/lib -L/usr/lib -lonig
+Cflags: -I/usr/local/include -I/usr/include
+
