@@ -19,7 +19,7 @@ On Ubuntu...
 
 Now that we've got Oniguruma installed, we can install Rubex!
 
-    go install github.com/moovweb/rubex
+    go install github.com/limetext/rubex
 
 ## Example Usage ##
 
