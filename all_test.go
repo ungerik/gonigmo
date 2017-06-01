@@ -489,7 +489,7 @@ func TestQuoteMeta(t *testing.T) {
 }
 
 /*
- * LiteralPrefix is not supported by rubex
+ * LiteralPrefix is not supported by gonigmo
  *
 //LiteralPrefix
 func TestLiteralPrefix(t *testing.T) {
