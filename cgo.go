@@ -1,4 +1,4 @@
-package rubex
+package gonigmo
 
-// #cgo pkg-config: oniguruma
+// #cgo pkg-config: onigmo
 import "C"

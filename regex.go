@@ -1,8 +1,8 @@
-package rubex
+package gonigmo
 
 /*
 #include <stdlib.h>
-#include <oniguruma.h>
+#include <onigmo.h>
 #include "chelper.h"
 */
 import "C"
@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	//"runtime"
 	"strconv"
 	"sync"
 	"unicode/utf8"

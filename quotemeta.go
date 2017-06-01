@@ -5,7 +5,7 @@
 
 // QuoteMeta func is copied here to avoid linking the entire Regexp library.
 
-package rubex
+package gonigmo
 
 func special(c int) bool {
 	for _, r := range `\.+*?()|[]^$` {
