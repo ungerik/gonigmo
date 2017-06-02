@@ -1,6 +1,6 @@
 # gonigmo is a Go wrapper for the Onigmo regex engine #
 
-Based on github.com/moovweb/rubex by Zhigang Chen
+Based on [github.com/moovweb/rubex](https://github.com/moovweb/rubex) by Zhigang Chen
 
 ## Installation ##
 
