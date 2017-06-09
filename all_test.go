@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-var good_re = []string{
+var goodRe = []string{
 	``,
 	`.`,
 	`^.$`,
@@ -37,7 +37,7 @@ type stringError struct {
 	err error
 }
 
-var bad_re = []stringError{
+var badRe = []stringError{
 	{`*`, errors.New("target of repeat operator is not specified")},
 	{`+`, errors.New("target of repeat operator is not specified")},
 	{`?`, errors.New("target of repeat operator is not specified")},
@@ -80,8 +80,8 @@ func compileTest(t *testing.T, expr string, error error) *Regexp {
 func TestGoodCompile(t *testing.T) {
 	testFunc := func(done chan bool) {
 		done <- false
-		for i := 0; i < len(good_re); i++ {
-			compileTest(t, good_re[i], nil)
+		for i := 0; i < len(goodRe); i++ {
+			compileTest(t, goodRe[i], nil)
 		}
 		done <- true
 	}
@@ -89,8 +89,8 @@ func TestGoodCompile(t *testing.T) {
 }
 
 func TestBadCompile(t *testing.T) {
-	for i := 0; i < len(bad_re); i++ {
-		compileTest(t, bad_re[i].re, bad_re[i].err)
+	for i := 0; i < len(badRe); i++ {
+		compileTest(t, badRe[i].re, badRe[i].err)
 	}
 }
 

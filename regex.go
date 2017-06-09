@@ -21,18 +21,22 @@ import (
 
 type strRange []int
 
-const numMatchStartSize = 4
-const numReadBufferStartSize = 256
+const (
+	numMatchStartSize      = 4
+	numReadBufferStartSize = 256
+)
 
 var mutex sync.Mutex
 
-type MatchData struct {
+type matchData struct {
 	count   int
 	indexes [][]int32
 }
 
-type NamedGroupInfo map[string]int
+type namedGroupInfo map[string]int
 
+// Regexp is the representation of a compiled regular expression.
+// A Regexp is safe for concurrent use by multiple goroutines.
 type Regexp struct {
 	pattern        string
 	regex          C.OnigRegex
@@ -40,10 +44,11 @@ type Regexp struct {
 	encoding       C.OnigEncoding
 	errorInfo      *C.OnigErrorInfo
 	errorBuf       *C.char
-	matchData      *MatchData
-	namedGroupInfo NamedGroupInfo
+	matchData      *matchData
+	namedGroupInfo namedGroupInfo
 }
 
+// NewRegexp creates a new Regexp with given pattern and options.
 func NewRegexp(pattern string, option int) (re *Regexp, err error) {
 	re = &Regexp{pattern: pattern}
 	patternCharPtr := C.CString(pattern)
@@ -51,13 +56,13 @@ func NewRegexp(pattern string, option int) (re *Regexp, err error) {
 
 	mutex.Lock()
 	defer mutex.Unlock()
-	error_code := C.NewOnigRegex(patternCharPtr, C.int(len(pattern)), C.int(option), &re.regex, &re.region, &re.encoding, &re.errorInfo, &re.errorBuf)
-	if error_code != C.ONIG_NORMAL {
+	errCode := C.NewOnigRegex(patternCharPtr, C.int(len(pattern)), C.int(option), &re.regex, &re.region, &re.encoding, &re.errorInfo, &re.errorBuf)
+	if errCode != C.ONIG_NORMAL {
 		err = errors.New(C.GoString(re.errorBuf))
 	} else {
 		err = nil
 		numCapturesInPattern := int(C.onig_number_of_captures(re.regex)) + 1
-		re.matchData = &MatchData{}
+		re.matchData = new(matchData)
 		re.matchData.indexes = make([][]int32, numMatchStartSize)
 		for i := 0; i < numMatchStartSize; i++ {
 			re.matchData.indexes[i] = make([]int32, numCapturesInPattern*2)
@@ -68,10 +73,15 @@ func NewRegexp(pattern string, option int) (re *Regexp, err error) {
 	return re, err
 }
 
+// Compile parses a regular expression and returns, if successful,
+// a Regexp object that can be used to match against text.
 func Compile(str string) (*Regexp, error) {
 	return NewRegexp(str, ONIG_OPTION_DEFAULT)
 }
 
+// MustCompile is like Compile but panics if the expression cannot be parsed.
+// It simplifies safe initialization of global variables holding compiled regular
+// expressions.
 func MustCompile(str string) *Regexp {
 	regexp, error := NewRegexp(str, ONIG_OPTION_DEFAULT)
 	if error != nil {
@@ -80,10 +90,15 @@ func MustCompile(str string) *Regexp {
 	return regexp
 }
 
+// CompileWithOption parses a regular expression and returns, if successful,
+// a Regexp object that can be used to match against text.
 func CompileWithOption(str string, option int) (*Regexp, error) {
 	return NewRegexp(str, option)
 }
 
+// MustCompileWithOption is like Compile but panics if the expression cannot be parsed.
+// It simplifies safe initialization of global variables holding compiled regular
+// expressions.
 func MustCompileWithOption(str string, option int) *Regexp {
 	regexp, error := NewRegexp(str, option)
 	if error != nil {
@@ -92,6 +107,7 @@ func MustCompileWithOption(str string, option int) *Regexp {
 	return regexp
 }
 
+// Free frees underlying C memory
 func (re *Regexp) Free() {
 	mutex.Lock()
 	if re.regex != nil {
@@ -113,7 +129,7 @@ func (re *Regexp) Free() {
 	}
 }
 
-func (re *Regexp) getNamedGroupInfo() (namedGroupInfo NamedGroupInfo) {
+func (re *Regexp) getNamedGroupInfo() (namedGroupInfo namedGroupInfo) {
 	numNamedGroups := int(C.onig_number_of_names(re.regex))
 	//when any named capture exisits, there is no numbered capture even if there are unnamed captures
 	if numNamedGroups > 0 {
@@ -141,7 +157,7 @@ func (re *Regexp) getNamedGroupInfo() (namedGroupInfo NamedGroupInfo) {
 	return
 }
 
-func (re *Regexp) groupNameToId(name string) (id int) {
+func (re *Regexp) groupNameToID(name string) (id int) {
 	if re.namedGroupInfo == nil {
 		id = ONIGERR_UNDEFINED_NAME_REFERENCE
 	} else {
@@ -158,9 +174,9 @@ func (re *Regexp) processMatch(numCaptures int) (match []int32) {
 	return matchData.indexes[matchData.count][:numCaptures*2]
 }
 
+// ClearMatchData clears the last match data
 func (re *Regexp) ClearMatchData() {
-	matchData := re.matchData
-	matchData.count = 0
+	re.matchData.count = 0
 }
 
 func (re *Regexp) find(b []byte, n int, offset int) (match []int) {
@@ -172,7 +188,18 @@ func (re *Regexp) find(b []byte, n int, offset int) (match []int) {
 	capturesPtr := unsafe.Pointer(&(matchData.indexes[matchData.count][0]))
 	numCaptures := int32(0)
 	numCapturesPtr := unsafe.Pointer(&numCaptures)
-	pos := int(C.SearchOnigRegex((ptr), C.int(n), C.int(offset), C.int(ONIG_OPTION_DEFAULT), re.regex, re.region, re.errorInfo, (*C.char)(nil), (*C.int)(capturesPtr), (*C.int)(numCapturesPtr)))
+	pos := C.SearchOnigRegex(
+		ptr,
+		C.int(n),
+		C.int(offset),
+		C.int(ONIG_OPTION_DEFAULT),
+		re.regex,
+		re.region,
+		re.errorInfo,
+		(*C.char)(nil),
+		(*C.int)(capturesPtr),
+		(*C.int)(numCapturesPtr),
+	)
 	if pos >= 0 {
 		if numCaptures <= 0 {
 			panic("cannot have 0 captures when processing a match")
@@ -221,7 +248,7 @@ func (re *Regexp) findAll(b []byte, n int) (matches [][]int) {
 			matchData.indexes = append(matchData.indexes, make([]int32, length))
 		}
 		if match := re.find(b, n, offset); len(match) > 0 {
-			matchData.count += 1
+			matchData.count++
 			//move offset to the ending index of the current match and prepare to find the next non-overlapping match
 			offset = match[1]
 			//if match[0] == match[1], it means the current match does not advance the search. we need to exit the loop to avoid getting stuck here.
@@ -250,6 +277,20 @@ func (re *Regexp) findAll(b []byte, n int) (matches [][]int) {
 	return
 }
 
+// Find returns a slice holding the text of the leftmost match in b of the regular expression.
+// A return value of nil indicates no match.
+func (re *Regexp) Find(b []byte) []byte {
+	loc := re.FindIndex(b)
+	if loc == nil {
+		return nil
+	}
+	return getCapture(b, loc[0], loc[1])
+}
+
+// FindIndex returns a two-element slice of integers defining the location of
+// the leftmost match in b of the regular expression. The match itself is at
+// b[loc[0]:loc[1]].
+// A return value of nil indicates no match.
 func (re *Regexp) FindIndex(b []byte) []int {
 	re.ClearMatchData()
 	match := re.find(b, len(b), 0)
@@ -259,14 +300,11 @@ func (re *Regexp) FindIndex(b []byte) []int {
 	return match[:2]
 }
 
-func (re *Regexp) Find(b []byte) []byte {
-	loc := re.FindIndex(b)
-	if loc == nil {
-		return nil
-	}
-	return getCapture(b, loc[0], loc[1])
-}
-
+// FindString returns a string holding the text of the leftmost match in s of the regular
+// expression. If there is no match, the return value is an empty string,
+// but it will also be empty if the regular expression successfully matches
+// an empty string. Use FindStringIndex or FindStringSubmatch if it is
+// necessary to distinguish these cases.
 func (re *Regexp) FindString(s string) string {
 	b := []byte(s)
 	mb := re.Find(b)
@@ -276,11 +314,19 @@ func (re *Regexp) FindString(s string) string {
 	return string(mb)
 }
 
+// FindStringIndex returns a two-element slice of integers defining the
+// location of the leftmost match in s of the regular expression. The match
+// itself is at s[loc[0]:loc[1]].
+// A return value of nil indicates no match.
 func (re *Regexp) FindStringIndex(s string) []int {
 	b := []byte(s)
 	return re.FindIndex(b)
 }
 
+// FindAllIndex is the 'All' version of FindIndex; it returns a slice of all
+// successive matches of the expression, as defined by the 'All' description
+// in the package comment.
+// A return value of nil indicates no match.
 func (re *Regexp) FindAllIndex(b []byte, n int) [][]int {
 	matches := re.findAll(b, n)
 	if len(matches) == 0 {
@@ -289,6 +335,10 @@ func (re *Regexp) FindAllIndex(b []byte, n int) [][]int {
 	return matches
 }
 
+// FindAll is the 'All' version of Find; it returns a slice of all successive
+// matches of the expression, as defined by the 'All' description in the
+// package comment.
+// A return value of nil indicates no match.
 func (re *Regexp) FindAll(b []byte, n int) [][]byte {
 	matches := re.FindAllIndex(b, n)
 	if matches == nil {
@@ -301,6 +351,10 @@ func (re *Regexp) FindAll(b []byte, n int) [][]byte {
 	return matchBytes
 }
 
+// FindAllString is the 'All' version of FindString; it returns a slice of all
+// successive matches of the expression, as defined by the 'All' description
+// in the package comment.
+// A return value of nil indicates no match.
 func (re *Regexp) FindAllString(s string, n int) []string {
 	b := []byte(s)
 	matches := re.FindAllIndex(b, n)
@@ -320,6 +374,10 @@ func (re *Regexp) FindAllString(s string, n int) []string {
 
 }
 
+// FindAllStringIndex is the 'All' version of FindStringIndex; it returns a
+// slice of all successive matches of the expression, as defined by the 'All'
+// description in the package comment.
+// A return value of nil indicates no match.
 func (re *Regexp) FindAllStringIndex(s string, n int) [][]int {
 	b := []byte(s)
 	return re.FindAllIndex(b, n)
@@ -331,6 +389,11 @@ func (re *Regexp) findSubmatchIndex(b []byte) (match []int) {
 	return
 }
 
+// FindSubmatchIndex returns a slice holding the index pairs identifying the
+// leftmost match of the regular expression in b and the matches, if any, of
+// its subexpressions, as defined by the 'Submatch' and 'Index' descriptions
+// in the package comment.
+// A return value of nil indicates no match.
 func (re *Regexp) FindSubmatchIndex(b []byte) []int {
 	match := re.findSubmatchIndex(b)
 	if len(match) == 0 {
@@ -339,6 +402,11 @@ func (re *Regexp) FindSubmatchIndex(b []byte) []int {
 	return match
 }
 
+// FindSubmatch returns a slice of slices holding the text of the leftmost
+// match of the regular expression in b and the matches, if any, of its
+// subexpressions, as defined by the 'Submatch' descriptions in the package
+// comment.
+// A return value of nil indicates no match.
 func (re *Regexp) FindSubmatch(b []byte) [][]byte {
 	match := re.findSubmatchIndex(b)
 	if match == nil {
@@ -355,6 +423,11 @@ func (re *Regexp) FindSubmatch(b []byte) [][]byte {
 	return results
 }
 
+// FindStringSubmatch returns a slice of strings holding the text of the
+// leftmost match of the regular expression in s and the matches, if any, of
+// its subexpressions, as defined by the 'Submatch' description in the
+// package comment.
+// A return value of nil indicates no match.
 func (re *Regexp) FindStringSubmatch(s string) []string {
 	b := []byte(s)
 	match := re.findSubmatchIndex(b)
@@ -378,11 +451,20 @@ func (re *Regexp) FindStringSubmatch(s string) []string {
 	return results
 }
 
+// FindStringSubmatchIndex returns a slice holding the index pairs
+// identifying the leftmost match of the regular expression in s and the
+// matches, if any, of its subexpressions, as defined by the 'Submatch' and
+// 'Index' descriptions in the package comment.
+// A return value of nil indicates no match.
 func (re *Regexp) FindStringSubmatchIndex(s string) []int {
 	b := []byte(s)
 	return re.FindSubmatchIndex(b)
 }
 
+// FindAllSubmatchIndex is the 'All' version of FindSubmatchIndex; it returns
+// a slice of all successive matches of the expression, as defined by the
+// 'All' description in the package comment.
+// A return value of nil indicates no match.
 func (re *Regexp) FindAllSubmatchIndex(b []byte, n int) [][]int {
 	matches := re.findAll(b, n)
 	if len(matches) == 0 {
@@ -391,6 +473,10 @@ func (re *Regexp) FindAllSubmatchIndex(b []byte, n int) [][]int {
 	return matches
 }
 
+// FindAllSubmatch is the 'All' version of FindSubmatch; it returns a slice
+// of all successive matches of the expression, as defined by the 'All'
+// description in the package comment.
+// A return value of nil indicates no match.
 func (re *Regexp) FindAllSubmatch(b []byte, n int) [][][]byte {
 	matches := re.findAll(b, n)
 	if len(matches) == 0 {
@@ -409,6 +495,10 @@ func (re *Regexp) FindAllSubmatch(b []byte, n int) [][][]byte {
 	return allCapturedBytes
 }
 
+// FindAllStringSubmatch is the 'All' version of FindStringSubmatch; it
+// returns a slice of all successive matches of the expression, as defined by
+// the 'All' description in the package comment.
+// A return value of nil indicates no match.
 func (re *Regexp) FindAllStringSubmatch(s string, n int) [][]string {
 	b := []byte(s)
 	matches := re.findAll(b, n)
@@ -432,27 +522,57 @@ func (re *Regexp) FindAllStringSubmatch(s string, n int) [][]string {
 	return allCapturedStrings
 }
 
+// FindAllStringSubmatchIndex is the 'All' version of
+// FindStringSubmatchIndex; it returns a slice of all successive matches of
+// the expression, as defined by the 'All' description in the package
+// comment.
+// A return value of nil indicates no match.
 func (re *Regexp) FindAllStringSubmatchIndex(s string, n int) [][]int {
 	b := []byte(s)
 	return re.FindAllSubmatchIndex(b, n)
 }
 
+// Match checks whether a textual regular expression
+// matches a byte slice. More complicated queries need
+// to use Compile and the full Regexp interface.
+func Match(pattern string, b []byte) (matched bool, err error) {
+	re, err := Compile(pattern)
+	if err != nil {
+		return false, err
+	}
+	return re.Match(b), nil
+}
+
+// MatchReader checks whether a textual regular expression matches the text
+// read by the RuneReader. More complicated queries need to use Compile and
+// the full Regexp interface.
+func MatchReader(pattern string, r io.RuneReader) (matched bool, err error) {
+	re, err := Compile(pattern)
+	if err != nil {
+		return false, err
+	}
+	return re.MatchReader(r), nil
+}
+
+// Match reports whether the Regexp matches the byte slice b.
 func (re *Regexp) Match(b []byte) bool {
 	return re.match(b, len(b), 0)
 }
 
+// MatchString reports whether the Regexp matches the string s.
 func (re *Regexp) MatchString(s string) bool {
 	b := []byte(s)
 	return re.Match(b)
 }
 
+// NumSubexp returns the number of parenthesized subexpressions in this Regexp.
 func (re *Regexp) NumSubexp() int {
 	return (int)(C.onig_number_of_captures(re.regex))
 }
 
 func (re *Regexp) getNamedCapture(name []byte, capturedBytes [][]byte) []byte {
 	nameStr := string(name)
-	capNum := re.groupNameToId(nameStr)
+	capNum := re.groupNameToID(nameStr)
 	if capNum < 0 || capNum >= len(capturedBytes) {
 		panic(fmt.Sprintf("capture group name (%q) has error\n", nameStr))
 	}
@@ -473,7 +593,7 @@ func fillCapturedValues(repl []byte, _ []byte, capturedBytes map[string][]byte) 
 	inEscapeMode := false
 	inGroupNameMode := false
 	groupName := make([]byte, 0, replLen)
-	for index := 0; index < replLen; index += 1 {
+	for index := 0; index < replLen; index++ {
 		ch := repl[index]
 		if inGroupNameMode && ch == byte('<') {
 		} else if inGroupNameMode && ch == byte('>') {
@@ -491,7 +611,7 @@ func fillCapturedValues(repl []byte, _ []byte, capturedBytes map[string][]byte) 
 		} else if inEscapeMode && ch == byte('k') && (index+1) < replLen && repl[index+1] == byte('<') {
 			inGroupNameMode = true
 			inEscapeMode = false
-			index += 1 //bypass the next char '<'
+			index++ //bypass the next char '<'
 		} else if inEscapeMode {
 			newRepl = append(newRepl, '\\')
 			newRepl = append(newRepl, ch)
@@ -543,20 +663,34 @@ func (re *Regexp) replaceAll(src, repl []byte, replFunc func([]byte, []byte, map
 	return dest
 }
 
+// ReplaceAll returns a copy of src, replacing matches of the Regexp
+// with the replacement text repl. Inside repl, $ signs are interpreted as
+// in Expand, so for instance $1 represents the text of the first submatch.
 func (re *Regexp) ReplaceAll(src, repl []byte) []byte {
 	return re.replaceAll(src, repl, fillCapturedValues)
 }
 
+// ReplaceAllFunc returns a copy of src in which all matches of the
+// Regexp have been replaced by the return value of function repl applied
+// to the matched byte slice. The replacement returned by repl is substituted
+// directly, without using Expand.
 func (re *Regexp) ReplaceAllFunc(src []byte, repl func([]byte) []byte) []byte {
 	return re.replaceAll(src, []byte(""), func(_ []byte, matchBytes []byte, _ map[string][]byte) []byte {
 		return repl(matchBytes)
 	})
 }
 
+// ReplaceAllString returns a copy of src, replacing matches of the Regexp
+// with the replacement string repl. Inside repl, $ signs are interpreted as
+// in Expand, so for instance $1 represents the text of the first submatch.
 func (re *Regexp) ReplaceAllString(src, repl string) string {
 	return string(re.ReplaceAll([]byte(src), []byte(repl)))
 }
 
+// ReplaceAllStringFunc returns a copy of src in which all matches of the
+// Regexp have been replaced by the return value of function repl applied
+// to the matched substring. The replacement returned by repl is substituted
+// directly, without using Expand.
 func (re *Regexp) ReplaceAllStringFunc(src string, repl func(string) string) string {
 	srcB := []byte(src)
 	destB := re.replaceAll(srcB, []byte(""), func(_ []byte, matchBytes []byte, _ map[string][]byte) []byte {
@@ -565,11 +699,12 @@ func (re *Regexp) ReplaceAllStringFunc(src string, repl func(string) string) str
 	return string(destB)
 }
 
+// String returns the source text used to compile the regular expression.
 func (re *Regexp) String() string {
 	return re.pattern
 }
 
-func grow_buffer(b []byte, offset int, n int) []byte {
+func growBuffer(b []byte, offset int, n int) []byte {
 	if offset+n > cap(b) {
 		buf := make([]byte, 2*cap(b)+n)
 		copy(buf, b[:offset])
@@ -581,11 +716,11 @@ func grow_buffer(b []byte, offset int, n int) []byte {
 func fromReader(r io.RuneReader) []byte {
 	b := make([]byte, numReadBufferStartSize)
 	offset := 0
-	var err error = nil
+	var err error
 	for err == nil {
 		rune, runeWidth, err := r.ReadRune()
 		if err == nil {
-			b = grow_buffer(b, offset, runeWidth)
+			b = growBuffer(b, offset, runeWidth)
 			writeWidth := utf8.EncodeRune(b[offset:], rune)
 			if runeWidth != writeWidth {
 				panic("reading rune width not equal to the written rune width")
@@ -598,26 +733,42 @@ func fromReader(r io.RuneReader) []byte {
 	return b[:offset]
 }
 
+// FindReaderIndex returns a two-element slice of integers defining the
+// location of the leftmost match of the regular expression in text read from
+// the RuneReader. The match text was found in the input stream at
+// byte offset loc[0] through loc[1]-1.
+// A return value of nil indicates no match.
 func (re *Regexp) FindReaderIndex(r io.RuneReader) []int {
 	b := fromReader(r)
 	return re.FindIndex(b)
 }
 
+// FindReaderSubmatchIndex returns a slice holding the index pairs
+// identifying the leftmost match of the regular expression of text read by
+// the RuneReader, and the matches, if any, of its subexpressions, as defined
+// by the 'Submatch' and 'Index' descriptions in the package comment. A
+// return value of nil indicates no match.
 func (re *Regexp) FindReaderSubmatchIndex(r io.RuneReader) []int {
 	b := fromReader(r)
 	return re.FindSubmatchIndex(b)
 }
 
+// MatchReader reports whether the Regexp matches the text read by the
+// RuneReader.
 func (re *Regexp) MatchReader(r io.RuneReader) bool {
 	b := fromReader(r)
 	return re.Match(b)
 }
 
+// LiteralPrefix returns a literal string that must begin any match
+// of the regular expression re. It returns the boolean true if the
+// literal string comprises the entire regular expression.
 func (re *Regexp) LiteralPrefix() (prefix string, complete bool) {
 	//no easy way to implement this
 	return "", false
 }
 
+// MatchString reports whether the Regexp matches the string s.
 func MatchString(pattern string, s string) (matched bool, error error) {
 	re, err := Compile(pattern)
 	if err != nil {
@@ -626,6 +777,7 @@ func MatchString(pattern string, s string) (matched bool, error error) {
 	return re.MatchString(s), nil
 }
 
+// Gsub TODO DOKU
 func (re *Regexp) Gsub(src, repl string) string {
 	srcBytes := ([]byte)(src)
 	replBytes := ([]byte)(repl)
@@ -633,6 +785,7 @@ func (re *Regexp) Gsub(src, repl string) string {
 	return string(replaced)
 }
 
+// GsubFunc TODO DOKU
 func (re *Regexp) GsubFunc(src string, replFunc func(string, map[string]string) string) string {
 	srcBytes := ([]byte)(src)
 	replaced := re.replaceAll(srcBytes, nil, func(_ []byte, matchBytes []byte, capturedBytes map[string][]byte) []byte {

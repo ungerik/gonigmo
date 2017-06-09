@@ -1,9 +1,14 @@
 package gonigmo
 
 const (
+	// ONIG_OPTION_DEFAULT are the default options
 	ONIG_OPTION_DEFAULT = ONIG_OPTION_NONE
+
 	/* options */
-	ONIG_OPTION_NONE               = 0
+
+	// ONIG_OPTION_NONE has no options
+	ONIG_OPTION_NONE = 0
+
 	ONIG_OPTION_IGNORECASE         = 1
 	ONIG_OPTION_EXTEND             = (ONIG_OPTION_IGNORECASE << 1)
 	ONIG_OPTION_MULTILINE          = (ONIG_OPTION_EXTEND << 1)
