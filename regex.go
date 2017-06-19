@@ -30,7 +30,7 @@ var mutex sync.Mutex
 
 type matchData struct {
 	count   int
-	indexes [][]int32
+	indices [][]int32
 }
 
 type namedGroupInfo map[string]int
@@ -63,9 +63,9 @@ func NewRegexp(pattern string, option int) (re *Regexp, err error) {
 		err = nil
 		numCapturesInPattern := int(C.onig_number_of_captures(re.regex)) + 1
 		re.matchData = new(matchData)
-		re.matchData.indexes = make([][]int32, numMatchStartSize)
+		re.matchData.indices = make([][]int32, numMatchStartSize)
 		for i := 0; i < numMatchStartSize; i++ {
-			re.matchData.indexes[i] = make([]int32, numCapturesInPattern*2)
+			re.matchData.indices[i] = make([]int32, numCapturesInPattern*2)
 		}
 		re.namedGroupInfo = re.getNamedGroupInfo()
 		//runtime.SetFinalizer(re, (*Regexp).Free)
@@ -142,7 +142,7 @@ func (re *Regexp) getNamedGroupInfo() (namedGroupInfo namedGroupInfo) {
 		numbersPtr := unsafe.Pointer(&groupNumbers[0])
 		length := int(C.GetCaptureNames(re.regex, bufferPtr, (C.int)(bufferSize), (*C.int)(numbersPtr)))
 		if length > 0 {
-			namesAsBytes := bytes.Split(nameBuffer[:length], ([]byte)(";"))
+			namesAsBytes := bytes.Split(nameBuffer[:length], []byte(";"))
 			if len(namesAsBytes) != numNamedGroups {
 				log.Fatalf("the number of named groups (%d) does not match the number names found (%d)\n", numNamedGroups, len(namesAsBytes))
 			}
@@ -171,7 +171,7 @@ func (re *Regexp) processMatch(numCaptures int) (match []int32) {
 		panic("cannot have 0 captures when processing a match")
 	}
 	matchData := re.matchData
-	return matchData.indexes[matchData.count][:numCaptures*2]
+	return matchData.indices[matchData.count][:numCaptures*2]
 }
 
 // ClearMatchData clears the last match data
@@ -183,9 +183,26 @@ func (re *Regexp) find(b []byte, n int, offset int) (match []int) {
 	if n == 0 {
 		b = []byte{0}
 	}
+	// fmt.Println("'" + string(b) + "'")
+	// b = []byte(string(b))
+	// if string(b) == "Wir bekämpfen Schimmel." {
+	// 	fmt.Println("XXXXXX")
+	// 	b = []byte(string(b))
+	// } else if string(b) == "Schimmelfeind GmbH - Haeckelstraße 10/1, 1230 Wien" {
+	// 	fmt.Println("XXXXXX2")
+	// 	b = []byte("Schimmelfeind GmbH - Haeckelstraße 10/1, 1230 Wien")
+	// } else {
+	// 	fmt.Println("YY", string(b))
+	// }
+	// b2 := make([]byte, len(b))
+	// for i := range b {
+	// 	b2[i] = b[i]
+	// }
+	// b = b2
+	// b = []byte("Wir bekämpfen Schimmel.")
 	ptr := unsafe.Pointer(&b[0])
 	matchData := re.matchData
-	capturesPtr := unsafe.Pointer(&(matchData.indexes[matchData.count][0]))
+	capturesPtr := unsafe.Pointer(&matchData.indices[matchData.count][0])
 	numCaptures := int32(0)
 	numCapturesPtr := unsafe.Pointer(&numCaptures)
 	pos := C.SearchOnigRegex(
@@ -204,7 +221,7 @@ func (re *Regexp) find(b []byte, n int, offset int) (match []int) {
 		if numCaptures <= 0 {
 			panic("cannot have 0 captures when processing a match")
 		}
-		match2 := matchData.indexes[matchData.count][:numCaptures*2]
+		match2 := matchData.indices[matchData.count][:numCaptures*2]
 		match = make([]int, len(match2))
 		for i := range match2 {
 			match[i] = int(match2[i])
@@ -230,7 +247,7 @@ func (re *Regexp) match(b []byte, n int, offset int) bool {
 		b = []byte{0}
 	}
 	ptr := unsafe.Pointer(&b[0])
-	pos := int(C.SearchOnigRegex((ptr), C.int(n), C.int(offset), C.int(ONIG_OPTION_DEFAULT), re.regex, re.region, re.errorInfo, (*C.char)(nil), (*C.int)(nil), (*C.int)(nil)))
+	pos := int(C.SearchOnigRegex(ptr, C.int(n), C.int(offset), C.int(ONIG_OPTION_DEFAULT), re.regex, re.region, re.errorInfo, (*C.char)(nil), (*C.int)(nil), (*C.int)(nil)))
 	return pos >= 0
 }
 
@@ -243,9 +260,9 @@ func (re *Regexp) findAll(b []byte, n int) (matches [][]int) {
 	matchData := re.matchData
 	offset := 0
 	for offset <= n {
-		if matchData.count >= len(matchData.indexes) {
-			length := len(matchData.indexes[0])
-			matchData.indexes = append(matchData.indexes, make([]int32, length))
+		if matchData.count >= len(matchData.indices) {
+			length := len(matchData.indices[0])
+			matchData.indices = append(matchData.indices, make([]int32, length))
 		}
 		if match := re.find(b, n, offset); len(match) > 0 {
 			matchData.count++
@@ -266,7 +283,7 @@ func (re *Regexp) findAll(b []byte, n int) (matches [][]int) {
 			break
 		}
 	}
-	matches2 := matchData.indexes[:matchData.count]
+	matches2 := matchData.indices[:matchData.count]
 	matches = make([][]int, len(matches2))
 	for i, v := range matches2 {
 		matches[i] = make([]int, len(v))
@@ -584,7 +601,7 @@ func (re *Regexp) getNumberedCapture(num int, capturedBytes [][]byte) []byte {
 	if re.namedGroupInfo == nil && num <= (len(capturedBytes)-1) && num >= 0 {
 		return capturedBytes[num]
 	}
-	return ([]byte)("")
+	return []byte("")
 }
 
 func fillCapturedValues(repl []byte, _ []byte, capturedBytes map[string][]byte) []byte {
@@ -764,8 +781,8 @@ func (re *Regexp) MatchReader(r io.RuneReader) bool {
 // of the regular expression re. It returns the boolean true if the
 // literal string comprises the entire regular expression.
 func (re *Regexp) LiteralPrefix() (prefix string, complete bool) {
-	//no easy way to implement this
-	return "", false
+	panic("no easy way to implement this")
+	// return "", false
 }
 
 // MatchString reports whether the Regexp matches the string s.
@@ -779,22 +796,22 @@ func MatchString(pattern string, s string) (matched bool, error error) {
 
 // Gsub TODO DOKU
 func (re *Regexp) Gsub(src, repl string) string {
-	srcBytes := ([]byte)(src)
-	replBytes := ([]byte)(repl)
+	srcBytes := []byte(src)
+	replBytes := []byte(repl)
 	replaced := re.replaceAll(srcBytes, replBytes, fillCapturedValues)
 	return string(replaced)
 }
 
 // GsubFunc TODO DOKU
 func (re *Regexp) GsubFunc(src string, replFunc func(string, map[string]string) string) string {
-	srcBytes := ([]byte)(src)
+	srcBytes := []byte(src)
 	replaced := re.replaceAll(srcBytes, nil, func(_ []byte, matchBytes []byte, capturedBytes map[string][]byte) []byte {
 		capturedStrings := make(map[string]string)
 		for name, capBytes := range capturedBytes {
 			capturedStrings[name] = string(capBytes)
 		}
 		matchString := string(matchBytes)
-		return ([]byte)(replFunc(matchString, capturedStrings))
+		return []byte(replFunc(matchString, capturedStrings))
 	})
 	return string(replaced)
 }

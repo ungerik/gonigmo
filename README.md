@@ -9,8 +9,7 @@ Install Onigmo:
 ```
 git clone https://github.com/k-takata/Onigmo.git --depth=1
 cd Onigmo
-./configure
-make && make install
+./configure && make && sudo make install
 ```
 
 Install or update gonigmo:
@@ -18,6 +17,11 @@ Install or update gonigmo:
 ```
 go get -u -f github.com/ungerik/gonigmo
 ```
+
+You may have to disable cgocheck to prevent false positives:
+
+    GODEBUG=cgocheck=0
+
 
 ## Example Usage ##
 
