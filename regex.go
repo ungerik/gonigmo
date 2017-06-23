@@ -46,6 +46,7 @@ type Regexp struct {
 	errorBuf       *C.char
 	matchData      *matchData
 	namedGroupInfo namedGroupInfo
+	mutex          *sync.Mutex
 }
 
 // NewRegexp creates a new Regexp with given pattern and options.
@@ -90,6 +91,10 @@ func MustCompile(str string) *Regexp {
 	return regexp
 }
 
+func MustCompileThreadsafe(str string) *Regexp {
+	return MustCompile(str).MakeThreadsafe()
+}
+
 // CompileWithOption parses a regular expression and returns, if successful,
 // a Regexp object that can be used to match against text.
 func CompileWithOption(str string, option int) (*Regexp, error) {
@@ -107,8 +112,54 @@ func MustCompileWithOption(str string, option int) *Regexp {
 	return regexp
 }
 
+func (re *Regexp) MakeThreadsafe() *Regexp {
+	re.mutex = new(sync.Mutex)
+	return re
+}
+
+func (re *Regexp) lock() {
+	if re.mutex != nil {
+		re.mutex.Lock()
+	}
+}
+func (re *Regexp) unlock() {
+	if re.mutex != nil {
+		re.mutex.Unlock()
+	}
+}
+
+func (re *Regexp) unlockCopy(indices []int) (result []int) {
+	if re.mutex == nil {
+		return indices
+	}
+	if indices != nil {
+		result = make([]int, len(indices))
+		copy(result, indices)
+	}
+	re.mutex.Unlock()
+	return result
+}
+
+func (re *Regexp) unlockCopy2(indices [][]int) (result [][]int) {
+	if re.mutex == nil {
+		return indices
+	}
+	if indices != nil {
+		result = make([][]int, len(indices))
+		for i := range result {
+			result[i] = make([]int, len(indices[i]))
+			copy(result[i], indices[i])
+		}
+	}
+	re.mutex.Unlock()
+	return result
+}
+
 // Free frees underlying C memory
 func (re *Regexp) Free() {
+	re.lock()
+	defer re.unlock()
+
 	mutex.Lock()
 	if re.regex != nil {
 		C.onig_free(re.regex)
@@ -174,8 +225,8 @@ func (re *Regexp) processMatch(numCaptures int) (match []int32) {
 	return matchData.indices[matchData.count][:numCaptures*2]
 }
 
-// ClearMatchData clears the last match data
-func (re *Regexp) ClearMatchData() {
+// clearMatchData clears the last match data
+func (re *Regexp) clearMatchData() {
 	re.matchData.count = 0
 }
 
@@ -183,23 +234,6 @@ func (re *Regexp) find(b []byte, n int, offset int) (match []int) {
 	if n == 0 {
 		b = []byte{0}
 	}
-	// fmt.Println("'" + string(b) + "'")
-	// b = []byte(string(b))
-	// if string(b) == "Wir bekämpfen Schimmel." {
-	// 	fmt.Println("XXXXXX")
-	// 	b = []byte(string(b))
-	// } else if string(b) == "Schimmelfeind GmbH - Haeckelstraße 10/1, 1230 Wien" {
-	// 	fmt.Println("XXXXXX2")
-	// 	b = []byte("Schimmelfeind GmbH - Haeckelstraße 10/1, 1230 Wien")
-	// } else {
-	// 	fmt.Println("YY", string(b))
-	// }
-	// b2 := make([]byte, len(b))
-	// for i := range b {
-	// 	b2[i] = b[i]
-	// }
-	// b = b2
-	// b = []byte("Wir bekämpfen Schimmel.")
 	ptr := unsafe.Pointer(&b[0])
 	matchData := re.matchData
 	capturesPtr := unsafe.Pointer(&matchData.indices[matchData.count][0])
@@ -231,10 +265,10 @@ func (re *Regexp) find(b []byte, n int, offset int) (match []int) {
 			log.Fatalf("expected %d captures but got %d\n", numCapturesInPattern, numCaptures)
 		}
 	}
-	return
+	return match
 }
 
-func getCapture(b []byte, beg int, end int) []byte {
+func extract(b []byte, beg int, end int) []byte {
 	if beg < 0 || end < 0 {
 		return nil
 	}
@@ -242,7 +276,7 @@ func getCapture(b []byte, beg int, end int) []byte {
 }
 
 func (re *Regexp) match(b []byte, n int, offset int) bool {
-	re.ClearMatchData()
+	re.clearMatchData()
 	if n == 0 {
 		b = []byte{0}
 	}
@@ -252,7 +286,7 @@ func (re *Regexp) match(b []byte, n int, offset int) bool {
 }
 
 func (re *Regexp) findAll(b []byte, n int) (matches [][]int) {
-	re.ClearMatchData()
+	re.clearMatchData()
 
 	if n < 0 {
 		n = len(b)
@@ -291,7 +325,7 @@ func (re *Regexp) findAll(b []byte, n int) (matches [][]int) {
 			matches[i][j] = int(v2)
 		}
 	}
-	return
+	return matches
 }
 
 // Find returns a slice holding the text of the leftmost match in b of the regular expression.
@@ -301,7 +335,7 @@ func (re *Regexp) Find(b []byte) []byte {
 	if loc == nil {
 		return nil
 	}
-	return getCapture(b, loc[0], loc[1])
+	return extract(b, loc[0], loc[1])
 }
 
 // FindIndex returns a two-element slice of integers defining the location of
@@ -309,12 +343,14 @@ func (re *Regexp) Find(b []byte) []byte {
 // b[loc[0]:loc[1]].
 // A return value of nil indicates no match.
 func (re *Regexp) FindIndex(b []byte) []int {
-	re.ClearMatchData()
+	re.lock()
+	re.clearMatchData()
 	match := re.find(b, len(b), 0)
 	if len(match) == 0 {
+		re.unlock()
 		return nil
 	}
-	return match[:2]
+	return re.unlockCopy(match[:2])
 }
 
 // FindString returns a string holding the text of the leftmost match in s of the regular
@@ -336,8 +372,7 @@ func (re *Regexp) FindString(s string) string {
 // itself is at s[loc[0]:loc[1]].
 // A return value of nil indicates no match.
 func (re *Regexp) FindStringIndex(s string) []int {
-	b := []byte(s)
-	return re.FindIndex(b)
+	return re.FindIndex([]byte(s))
 }
 
 // FindAllIndex is the 'All' version of FindIndex; it returns a slice of all
@@ -345,11 +380,13 @@ func (re *Regexp) FindStringIndex(s string) []int {
 // in the package comment.
 // A return value of nil indicates no match.
 func (re *Regexp) FindAllIndex(b []byte, n int) [][]int {
+	re.lock()
 	matches := re.findAll(b, n)
 	if len(matches) == 0 {
+		re.unlock()
 		return nil
 	}
-	return matches
+	return re.unlockCopy2(matches)
 }
 
 // FindAll is the 'All' version of Find; it returns a slice of all successive
@@ -363,7 +400,7 @@ func (re *Regexp) FindAll(b []byte, n int) [][]byte {
 	}
 	matchBytes := make([][]byte, 0, len(matches))
 	for _, match := range matches {
-		matchBytes = append(matchBytes, getCapture(b, match[0], match[1]))
+		matchBytes = append(matchBytes, extract(b, match[0], match[1]))
 	}
 	return matchBytes
 }
@@ -380,7 +417,7 @@ func (re *Regexp) FindAllString(s string, n int) []string {
 	}
 	matchStrings := make([]string, 0, len(matches))
 	for _, match := range matches {
-		m := getCapture(b, match[0], match[1])
+		m := extract(b, match[0], match[1])
 		if m == nil {
 			matchStrings = append(matchStrings, "")
 		} else {
@@ -396,14 +433,12 @@ func (re *Regexp) FindAllString(s string, n int) []string {
 // description in the package comment.
 // A return value of nil indicates no match.
 func (re *Regexp) FindAllStringIndex(s string, n int) [][]int {
-	b := []byte(s)
-	return re.FindAllIndex(b, n)
+	return re.FindAllIndex([]byte(s), n)
 }
 
-func (re *Regexp) findSubmatchIndex(b []byte) (match []int) {
-	re.ClearMatchData()
-	match = re.find(b, len(b), 0)
-	return
+func (re *Regexp) findSubmatchIndex(b []byte) []int {
+	re.clearMatchData()
+	return re.find(b, len(b), 0)
 }
 
 // FindSubmatchIndex returns a slice holding the index pairs identifying the
@@ -412,11 +447,13 @@ func (re *Regexp) findSubmatchIndex(b []byte) (match []int) {
 // in the package comment.
 // A return value of nil indicates no match.
 func (re *Regexp) FindSubmatchIndex(b []byte) []int {
+	re.lock()
 	match := re.findSubmatchIndex(b)
 	if len(match) == 0 {
+		re.unlock()
 		return nil
 	}
-	return match
+	return re.unlockCopy(match)
 }
 
 // FindSubmatch returns a slice of slices holding the text of the leftmost
@@ -425,7 +462,7 @@ func (re *Regexp) FindSubmatchIndex(b []byte) []int {
 // comment.
 // A return value of nil indicates no match.
 func (re *Regexp) FindSubmatch(b []byte) [][]byte {
-	match := re.findSubmatchIndex(b)
+	match := re.FindSubmatchIndex(b)
 	if match == nil {
 		return nil
 	}
@@ -435,7 +472,7 @@ func (re *Regexp) FindSubmatch(b []byte) [][]byte {
 	}
 	results := make([][]byte, 0, length)
 	for i := 0; i < length; i++ {
-		results = append(results, getCapture(b, match[2*i], match[2*i+1]))
+		results = append(results, extract(b, match[2*i], match[2*i+1]))
 	}
 	return results
 }
@@ -447,7 +484,7 @@ func (re *Regexp) FindSubmatch(b []byte) [][]byte {
 // A return value of nil indicates no match.
 func (re *Regexp) FindStringSubmatch(s string) []string {
 	b := []byte(s)
-	match := re.findSubmatchIndex(b)
+	match := re.FindSubmatchIndex(b)
 	if match == nil {
 		return nil
 	}
@@ -458,7 +495,7 @@ func (re *Regexp) FindStringSubmatch(s string) []string {
 
 	results := make([]string, 0, length)
 	for i := 0; i < length; i++ {
-		cap := getCapture(b, match[2*i], match[2*i+1])
+		cap := extract(b, match[2*i], match[2*i+1])
 		if cap == nil {
 			results = append(results, "")
 		} else {
@@ -474,8 +511,7 @@ func (re *Regexp) FindStringSubmatch(s string) []string {
 // 'Index' descriptions in the package comment.
 // A return value of nil indicates no match.
 func (re *Regexp) FindStringSubmatchIndex(s string) []int {
-	b := []byte(s)
-	return re.FindSubmatchIndex(b)
+	return re.FindSubmatchIndex([]byte(s))
 }
 
 // FindAllSubmatchIndex is the 'All' version of FindSubmatchIndex; it returns
@@ -483,11 +519,13 @@ func (re *Regexp) FindStringSubmatchIndex(s string) []int {
 // 'All' description in the package comment.
 // A return value of nil indicates no match.
 func (re *Regexp) FindAllSubmatchIndex(b []byte, n int) [][]int {
+	re.lock()
 	matches := re.findAll(b, n)
 	if len(matches) == 0 {
+		re.unlock()
 		return nil
 	}
-	return matches
+	return re.unlockCopy2(matches)
 }
 
 // FindAllSubmatch is the 'All' version of FindSubmatch; it returns a slice
@@ -495,7 +533,7 @@ func (re *Regexp) FindAllSubmatchIndex(b []byte, n int) [][]int {
 // description in the package comment.
 // A return value of nil indicates no match.
 func (re *Regexp) FindAllSubmatch(b []byte, n int) [][][]byte {
-	matches := re.findAll(b, n)
+	matches := re.FindAllIndex(b, n)
 	if len(matches) == 0 {
 		return nil
 	}
@@ -504,7 +542,7 @@ func (re *Regexp) FindAllSubmatch(b []byte, n int) [][][]byte {
 		length := len(match) / 2
 		capturedBytes := make([][]byte, 0, length)
 		for i := 0; i < length; i++ {
-			capturedBytes = append(capturedBytes, getCapture(b, match[2*i], match[2*i+1]))
+			capturedBytes = append(capturedBytes, extract(b, match[2*i], match[2*i+1]))
 		}
 		allCapturedBytes = append(allCapturedBytes, capturedBytes)
 	}
@@ -518,7 +556,7 @@ func (re *Regexp) FindAllSubmatch(b []byte, n int) [][][]byte {
 // A return value of nil indicates no match.
 func (re *Regexp) FindAllStringSubmatch(s string, n int) [][]string {
 	b := []byte(s)
-	matches := re.findAll(b, n)
+	matches := re.FindAllIndex(b, n)
 	if len(matches) == 0 {
 		return nil
 	}
@@ -527,7 +565,7 @@ func (re *Regexp) FindAllStringSubmatch(s string, n int) [][]string {
 		length := len(match) / 2
 		capturedStrings := make([]string, 0, length)
 		for i := 0; i < length; i++ {
-			cap := getCapture(b, match[2*i], match[2*i+1])
+			cap := extract(b, match[2*i], match[2*i+1])
 			if cap == nil {
 				capturedStrings = append(capturedStrings, "")
 			} else {
@@ -545,8 +583,7 @@ func (re *Regexp) FindAllStringSubmatch(s string, n int) [][]string {
 // comment.
 // A return value of nil indicates no match.
 func (re *Regexp) FindAllStringSubmatchIndex(s string, n int) [][]int {
-	b := []byte(s)
-	return re.FindAllSubmatchIndex(b, n)
+	return re.FindAllSubmatchIndex([]byte(s), n)
 }
 
 // Match checks whether a textual regular expression
@@ -573,18 +610,23 @@ func MatchReader(pattern string, r io.RuneReader) (matched bool, err error) {
 
 // Match reports whether the Regexp matches the byte slice b.
 func (re *Regexp) Match(b []byte) bool {
-	return re.match(b, len(b), 0)
+	re.lock()
+	result := re.match(b, len(b), 0)
+	re.unlock()
+	return result
 }
 
 // MatchString reports whether the Regexp matches the string s.
 func (re *Regexp) MatchString(s string) bool {
-	b := []byte(s)
-	return re.Match(b)
+	return re.Match([]byte(s))
 }
 
 // NumSubexp returns the number of parenthesized subexpressions in this Regexp.
 func (re *Regexp) NumSubexp() int {
-	return (int)(C.onig_number_of_captures(re.regex))
+	re.lock()
+	result := (int)(C.onig_number_of_captures(re.regex))
+	re.unlock()
+	return result
 }
 
 func (re *Regexp) getNamedCapture(name []byte, capturedBytes [][]byte) []byte {
@@ -654,14 +696,14 @@ func (re *Regexp) replaceAll(src, repl []byte, replFunc func([]byte, []byte, map
 		capturedBytes := make(map[string][]byte)
 		if re.namedGroupInfo == nil {
 			for j := 0; j < length; j++ {
-				capturedBytes[strconv.Itoa(j)] = getCapture(src, match[2*j], match[2*j+1])
+				capturedBytes[strconv.Itoa(j)] = extract(src, match[2*j], match[2*j+1])
 			}
 		} else {
 			for name, j := range re.namedGroupInfo {
-				capturedBytes[name] = getCapture(src, match[2*j], match[2*j+1])
+				capturedBytes[name] = extract(src, match[2*j], match[2*j+1])
 			}
 		}
-		matchBytes := getCapture(src, match[0], match[1])
+		matchBytes := extract(src, match[0], match[1])
 		newRepl := replFunc(repl, matchBytes, capturedBytes)
 		prevEnd := 0
 		if i > 0 {
@@ -684,7 +726,10 @@ func (re *Regexp) replaceAll(src, repl []byte, replFunc func([]byte, []byte, map
 // with the replacement text repl. Inside repl, $ signs are interpreted as
 // in Expand, so for instance $1 represents the text of the first submatch.
 func (re *Regexp) ReplaceAll(src, repl []byte) []byte {
-	return re.replaceAll(src, repl, fillCapturedValues)
+	re.lock()
+	result := re.replaceAll(src, repl, fillCapturedValues)
+	re.unlock()
+	return result
 }
 
 // ReplaceAllFunc returns a copy of src in which all matches of the
@@ -692,9 +737,12 @@ func (re *Regexp) ReplaceAll(src, repl []byte) []byte {
 // to the matched byte slice. The replacement returned by repl is substituted
 // directly, without using Expand.
 func (re *Regexp) ReplaceAllFunc(src []byte, repl func([]byte) []byte) []byte {
-	return re.replaceAll(src, []byte(""), func(_ []byte, matchBytes []byte, _ map[string][]byte) []byte {
+	re.lock()
+	result := re.replaceAll(src, []byte(""), func(_ []byte, matchBytes []byte, _ map[string][]byte) []byte {
 		return repl(matchBytes)
 	})
+	re.unlock()
+	return result
 }
 
 // ReplaceAllString returns a copy of src, replacing matches of the Regexp
@@ -710,15 +758,20 @@ func (re *Regexp) ReplaceAllString(src, repl string) string {
 // directly, without using Expand.
 func (re *Regexp) ReplaceAllStringFunc(src string, repl func(string) string) string {
 	srcB := []byte(src)
+	re.lock()
 	destB := re.replaceAll(srcB, []byte(""), func(_ []byte, matchBytes []byte, _ map[string][]byte) []byte {
 		return []byte(repl(string(matchBytes)))
 	})
+	re.unlock()
 	return string(destB)
 }
 
 // String returns the source text used to compile the regular expression.
 func (re *Regexp) String() string {
-	return re.pattern
+	re.lock()
+	result := re.pattern
+	re.unlock()
+	return result
 }
 
 func growBuffer(b []byte, offset int, n int) []byte {
@@ -756,8 +809,7 @@ func fromReader(r io.RuneReader) []byte {
 // byte offset loc[0] through loc[1]-1.
 // A return value of nil indicates no match.
 func (re *Regexp) FindReaderIndex(r io.RuneReader) []int {
-	b := fromReader(r)
-	return re.FindIndex(b)
+	return re.FindIndex(fromReader(r))
 }
 
 // FindReaderSubmatchIndex returns a slice holding the index pairs
@@ -766,15 +818,13 @@ func (re *Regexp) FindReaderIndex(r io.RuneReader) []int {
 // by the 'Submatch' and 'Index' descriptions in the package comment. A
 // return value of nil indicates no match.
 func (re *Regexp) FindReaderSubmatchIndex(r io.RuneReader) []int {
-	b := fromReader(r)
-	return re.FindSubmatchIndex(b)
+	return re.FindSubmatchIndex(fromReader(r))
 }
 
 // MatchReader reports whether the Regexp matches the text read by the
 // RuneReader.
 func (re *Regexp) MatchReader(r io.RuneReader) bool {
-	b := fromReader(r)
-	return re.Match(b)
+	return re.Match(fromReader(r))
 }
 
 // LiteralPrefix returns a literal string that must begin any match
@@ -798,13 +848,16 @@ func MatchString(pattern string, s string) (matched bool, error error) {
 func (re *Regexp) Gsub(src, repl string) string {
 	srcBytes := []byte(src)
 	replBytes := []byte(repl)
+	re.lock()
 	replaced := re.replaceAll(srcBytes, replBytes, fillCapturedValues)
+	re.unlock()
 	return string(replaced)
 }
 
 // GsubFunc TODO DOKU
 func (re *Regexp) GsubFunc(src string, replFunc func(string, map[string]string) string) string {
 	srcBytes := []byte(src)
+	re.lock()
 	replaced := re.replaceAll(srcBytes, nil, func(_ []byte, matchBytes []byte, capturedBytes map[string][]byte) []byte {
 		capturedStrings := make(map[string]string)
 		for name, capBytes := range capturedBytes {
@@ -813,5 +866,6 @@ func (re *Regexp) GsubFunc(src string, replFunc func(string, map[string]string) 
 		matchString := string(matchBytes)
 		return []byte(replFunc(matchString, capturedStrings))
 	})
+	re.unlock()
 	return string(replaced)
 }
