@@ -112,6 +112,10 @@ func MustCompileWithOption(str string, option int) *Regexp {
 	return regexp
 }
 
+func (re *Regexp) Pattern() string {
+	return re.pattern
+}
+
 func (re *Regexp) MakeThreadsafe() *Regexp {
 	re.mutex = new(sync.Mutex)
 	return re
