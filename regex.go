@@ -80,6 +80,14 @@ func Compile(str string) (*Regexp, error) {
 	return NewRegexp(str, ONIG_OPTION_DEFAULT)
 }
 
+func CompileThreadsafe(str string) (*Regexp, error) {
+	re, err := NewRegexp(str, ONIG_OPTION_DEFAULT)
+	if err != nil {
+		return nil, err
+	}
+	return re.MakeThreadsafe(), nil
+}
+
 // MustCompile is like Compile but panics if the expression cannot be parsed.
 // It simplifies safe initialization of global variables holding compiled regular
 // expressions.
@@ -115,6 +123,31 @@ func MustCompileWithOption(str string, option int) *Regexp {
 func (re *Regexp) Pattern() string {
 	return re.pattern
 }
+
+// // Scan implements the sql.Scanner interface.
+// // SQL NULL is scanned as *Regexp nil.
+// func (re *Regexp) Scan(value interface{}) error {
+// 	var ns sql.NullString
+// 	err := ns.Scan(value)
+// 	if err != nil {
+// 		return err
+// 	}
+// 	if ns.Valid {
+// 		re, err = CompileThreadsafe(ns.String)
+// 	} else {
+// 		re = nil
+// 	}
+// 	return err
+// }
+
+// // Value implements the driver sql.Valuer interface.
+// // *Regexp nil is returned as SQL NULL.
+// func (re *Regexp) Value() (driver.Value, error) {
+// 	if re == nil {
+// 		return nil, nil
+// 	}
+// 	return re.pattern, nil
+// }
 
 func (re *Regexp) MakeThreadsafe() *Regexp {
 	re.mutex = new(sync.Mutex)
