@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"strconv"
 	"sync"
 	"unicode/utf8"
@@ -232,14 +231,14 @@ func (re *Regexp) getNamedGroupInfo() (namedGroupInfo namedGroupInfo) {
 		if length > 0 {
 			namesAsBytes := bytes.Split(nameBuffer[:length], []byte(";"))
 			if len(namesAsBytes) != numNamedGroups {
-				log.Fatalf("the number of named groups (%d) does not match the number names found (%d)\n", numNamedGroups, len(namesAsBytes))
+				panic(fmt.Sprintf("the number of named groups (%d) does not match the number names found (%d)\n", numNamedGroups, len(namesAsBytes)))
 			}
 			for i, nameAsBytes := range namesAsBytes {
 				name := string(nameAsBytes)
 				namedGroupInfo[name] = int(groupNumbers[i])
 			}
 		} else {
-			log.Fatalf("could not get the capture group names from %q", re.String())
+			panic(fmt.Sprintf("could not get the capture group names from %q", re.String()))
 		}
 	}
 	return
@@ -299,7 +298,7 @@ func (re *Regexp) find(b []byte, n int, offset int) (match []int) {
 		}
 		numCapturesInPattern := int32(C.onig_number_of_captures(re.regex)) + 1
 		if numCapturesInPattern != numCaptures {
-			log.Fatalf("expected %d captures but got %d\n", numCapturesInPattern, numCaptures)
+			panic(fmt.Sprintf("expected %d captures but got %d\n", numCapturesInPattern, numCaptures))
 		}
 	}
 	return match
