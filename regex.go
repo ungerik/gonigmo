@@ -76,10 +76,6 @@ func NewRegexp(pattern string, option int) (re *Regexp, err error) {
 // Compile parses a regular expression and returns, if successful,
 // a Regexp object that can be used to match against text.
 func Compile(str string) (*Regexp, error) {
-	return NewRegexp(str, ONIG_OPTION_DEFAULT)
-}
-
-func CompileThreadsafe(str string) (*Regexp, error) {
 	re, err := NewRegexp(str, ONIG_OPTION_DEFAULT)
 	if err != nil {
 		return nil, err
@@ -87,10 +83,18 @@ func CompileThreadsafe(str string) (*Regexp, error) {
 	return re.MakeThreadsafe(), nil
 }
 
+func CompileNonThreadsafe(str string) (*Regexp, error) {
+	return NewRegexp(str, ONIG_OPTION_DEFAULT)
+}
+
 // MustCompile is like Compile but panics if the expression cannot be parsed.
 // It simplifies safe initialization of global variables holding compiled regular
 // expressions.
 func MustCompile(str string) *Regexp {
+	return MustCompileNonThreadsafe(str).MakeThreadsafe()
+}
+
+func MustCompileNonThreadsafe(str string) *Regexp {
 	regexp, error := NewRegexp(str, ONIG_OPTION_DEFAULT)
 	if error != nil {
 		panic("regexp: compiling " + str + ": " + error.Error())
@@ -98,20 +102,16 @@ func MustCompile(str string) *Regexp {
 	return regexp
 }
 
-func MustCompileThreadsafe(str string) *Regexp {
-	return MustCompile(str).MakeThreadsafe()
-}
-
 // CompileWithOption parses a regular expression and returns, if successful,
 // a Regexp object that can be used to match against text.
-func CompileWithOption(str string, option int) (*Regexp, error) {
+func CompileWithOptionNonThreadsafe(str string, option int) (*Regexp, error) {
 	return NewRegexp(str, option)
 }
 
 // MustCompileWithOption is like Compile but panics if the expression cannot be parsed.
 // It simplifies safe initialization of global variables holding compiled regular
 // expressions.
-func MustCompileWithOption(str string, option int) *Regexp {
+func MustCompileWithOptionNonThreadsafe(str string, option int) *Regexp {
 	regexp, error := NewRegexp(str, option)
 	if error != nil {
 		panic("regexp: compiling " + str + ": " + error.Error())

@@ -248,13 +248,13 @@ func TestReplaceAllFunc(t *testing.T) {
 		actual := re.ReplaceAllStringFunc(tc.input, tc.replacement)
 		if actual != tc.output {
 			t.Errorf("%q.ReplaceFunc(%q,%q) = %q; want %q",
-				tc.pattern, tc.input, tc.replacement, actual, tc.output)
+				tc.pattern, tc.input, tc.replacement(tc.input), actual, tc.output)
 		}
 		// now try bytes
 		actual = string(re.ReplaceAllFunc([]byte(tc.input), func(s []byte) []byte { return []byte(tc.replacement(string(s))) }))
 		if actual != tc.output {
 			t.Errorf("%q.ReplaceFunc(%q,%q) = %q; want %q",
-				tc.pattern, tc.input, tc.replacement, actual, tc.output)
+				tc.pattern, tc.input, tc.replacement(tc.input), actual, tc.output)
 		}
 	}
 }
@@ -434,7 +434,7 @@ func TestPattern2(t *testing.T) {
 }
 
 func TestCompileWithOption(t *testing.T) {
-	re := MustCompileWithOption("a$", ONIG_OPTION_IGNORECASE)
+	re := MustCompileWithOptionNonThreadsafe("a$", ONIG_OPTION_IGNORECASE)
 	if !re.MatchString("A") {
 		t.Errorf("expect to match\n")
 	}
